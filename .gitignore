@@ -1,0 +1,8 @@
+# Ignore the uploaded photos and videos
+uploads/
+
+# Ignore the databases containing passwords and text
+*.json
+
+# Ignore Python background files
+__pycache__/
