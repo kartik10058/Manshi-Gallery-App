@@ -309,9 +309,26 @@ def add_comment(post_id):
     if 'username' not in session: return "Unauthorized", 401
     text = request.form.get('text')
     if not text: return "Empty", 400
+    
+    me = session['username']
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT INTO comments (post_id, author, text) VALUES (?, ?, ?)", (post_id, session['username'], text))
+    
+    # 1. Save the comment
+    c.execute("INSERT INTO comments (post_id, author, text) VALUES (?, ?, ?)", (post_id, me, text))
+    
+    # 2. Find the post owner to send the notification
+    c.execute("SELECT owner FROM posts WHERE id=?", (post_id,))
+    post = c.fetchone()
+    owner = post['owner'] if post else None
+    
+    # 3. Fire the notification! (Don't notify if we comment on our own post)
+    if owner and owner != me:
+        # We slice the text [:20] so if it's a huge comment, the notification doesn't break the layout!
+        msg = f"@{me} commented: '{text[:20]}...'" 
+        c.execute("INSERT INTO notifications (username, message) VALUES (?, ?)", (owner, msg))
+        socketio.emit('receive_notification', {'message': msg}, to=f"notify_{owner}")
+        
     conn.commit()
     conn.close()
     return "Success", 200
@@ -343,6 +360,7 @@ def get_messages(other_user):
     msgs = [dict(row) for row in c.fetchall()]
     conn.close()
     return jsonify(msgs)
+
 @app.route('/follow/<target_user>', methods=['POST'])
 def toggle_follow(target_user):
     if 'username' not in session: return "Unauthorized", 401
@@ -351,14 +369,20 @@ def toggle_follow(target_user):
     
     conn = get_db()
     c = conn.cursor()
-    # Check if we are already following them
     c.execute("SELECT 1 FROM followers WHERE follower=? AND followed=?", (me, target_user))
+    
     if c.fetchone():
-        # If yes, Unfollow!
+        # Unfollow (No notification needed)
         c.execute("DELETE FROM followers WHERE follower=? AND followed=?", (me, target_user))
     else:
-        # If no, Follow!
+        # Follow!
         c.execute("INSERT INTO followers (follower, followed) VALUES (?, ?)", (me, target_user))
+        
+        # Fire the notification!
+        msg = f"@{me} started following you! 👤"
+        c.execute("INSERT INTO notifications (username, message) VALUES (?, ?)", (target_user, msg))
+        socketio.emit('receive_notification', {'message': msg}, to=f"notify_{target_user}")
+        
     conn.commit()
     conn.close()
     return "Success", 200
